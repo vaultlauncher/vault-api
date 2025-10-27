@@ -2,6 +2,7 @@ import express from "express";
 import axios from "axios";
 import NodeCache from "node-cache";
 import cors from "cors";
+import fs from "fs/promises";
 
 const app = express();
 app.use(cors());
@@ -9,7 +10,10 @@ app.disable("x-powered-by");
 app.use(express.json());
 
 const port = process.env.PORT || 3000;
-const cache = new NodeCache({ stdTTL: 18000 }); // 5 hours
+const cache = new NodeCache({ stdTTL: 18000 });
+const APP_LIST_FILE = "app_list.json";
+
+let steamApps: any[] = [];
 
 const STEAM_APP_LIST_URL =
   "https://api.steampowered.com/ISteamApps/GetAppList/v2/";
@@ -18,6 +22,47 @@ const STEAM_FEATURED_CATEGORIES_URL =
   "https://store.steampowered.com/api/featuredcategories/";
 const STEAM_CONCURRENT_PLAYERS_URL =
   "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/";
+
+let appListReady = false;
+async function initAppList() {
+  try {
+    try {
+      const data = await fs.readFile(APP_LIST_FILE, "utf8");
+      const appList = JSON.parse(data);
+      appList.forEach((g: any) => (g.lowerName = g.name.toLowerCase()));
+      steamApps = appList;
+      appListReady = true;
+      console.log(`App list loaded from file: ${appList.length} games`);
+      return;
+    } catch {}
+
+    console.log("Fetching Steam app list...");
+    const response = await axios.get(STEAM_APP_LIST_URL);
+    const appList = response.data.applist.apps;
+    appList.forEach((g: any) => (g.lowerName = g.name.toLowerCase()));
+    steamApps = appList;
+    appListReady = true;
+    await fs.writeFile(APP_LIST_FILE, JSON.stringify(appList));
+    console.log(`App list cached and saved: ${appList.length} games`);
+  } catch (error) {
+    console.error("Failed to fetch app list:", error);
+    appListReady = false;
+  }
+}
+
+initAppList();
+
+// Refresh app list every 24 hours
+setInterval(initAppList, 86400000);
+
+async function getAppList(): Promise<any[]> {
+  if (!steamApps || steamApps.length === 0) {
+    console.log("App list not in memory, loading...");
+    await initAppList();
+    return steamApps;
+  }
+  return steamApps;
+}
 
 async function fetchConcurrentPlayers(appid: number) {
   try {
@@ -68,106 +113,34 @@ app.get("/games/search", async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const perPage = Math.min(100, parseInt(req.query.perPage as string) || 16);
 
-  const sortBy = (req.query.sortBy as string) || "rating_desc";
-  const onlyAvailable = req.query.onlyAvailable === "1";
-  const genre = req.query.genre as string;
-  const minRating = parseInt(req.query.minRating as string) || 0;
-  const minYear = parseInt(req.query.minYear as string) || 0;
-  const maxYear = parseInt(req.query.maxYear as string) || 9999;
-
   try {
-    const allGames = await getCachedOrFetch(
-      "appList",
-      async () => (await axios.get(STEAM_APP_LIST_URL)).data.applist.apps
-    );
+    const allGames = await getAppList();
 
-    // Get detailed info for filtered games
-    let filtered = allGames.filter((g: any) =>
-      g.name.toLowerCase().includes(query)
-    );
-
-    // Fetch details for filtered games (limited batch to avoid too many requests)
-    const batchSize = 100;
-    const gamesToFetch = filtered.slice(0, batchSize);
-
-    const detailedGames = await Promise.all(
-      gamesToFetch.map(async (g: any) => {
-        const detailsWrapper = await fetchAppDetails(g.appid);
-        if (!detailsWrapper?.success) return null;
-        return detailsWrapper.data;
-      })
-    );
-
-    let validGames = detailedGames.filter(Boolean);
-
-    // Apply filters
-    if (onlyAvailable) {
-      validGames = validGames.filter((g: any) => g.is_free || g.price_overview);
+    if (!Array.isArray(allGames) || allGames.length === 0) {
+      return res
+        .status(503)
+        .json({ error: "App list not ready, please retry in a moment" });
     }
 
-    if (genre && genre !== "all") {
-      validGames = validGames.filter((g: any) =>
-        g.genres?.some((gen: any) => gen.description === genre)
-      );
+    const cacheKey = `search_filtered_${query}`;
+    let filtered: any = cache.get(cacheKey);
+    let cached = true;
+    if (!filtered) {
+      filtered = allGames.filter((g: any) => g.lowerName.includes(query));
+      cache.set(cacheKey, filtered);
+      cached = false;
     }
-
-    if (minRating > 0) {
-      validGames = validGames.filter(
-        (g: any) => (g.metacritic?.score || 0) >= minRating
-      );
-    }
-
-    if (minYear > 0 || maxYear < 9999) {
-      validGames = validGames.filter((g: any) => {
-        const releaseYear = g.release_date?.date
-          ? new Date(g.release_date.date).getFullYear()
-          : 0;
-        return releaseYear >= minYear && releaseYear <= maxYear;
-      });
-    }
-
-    // Sort
-    switch (sortBy) {
-      case "rating_desc":
-        validGames.sort(
-          (a: any, b: any) =>
-            (b.metacritic?.score || 0) - (a.metacritic?.score || 0)
-        );
-        break;
-      case "rating_asc":
-        validGames.sort(
-          (a: any, b: any) =>
-            (a.metacritic?.score || 0) - (b.metacritic?.score || 0)
-        );
-        break;
-      case "name_asc":
-        validGames.sort((a: any, b: any) => a.name.localeCompare(b.name));
-        break;
-      case "release_desc":
-        validGames.sort((a: any, b: any) => {
-          const dateA = a.release_date?.date
-            ? new Date(a.release_date.date).getTime()
-            : 0;
-          const dateB = b.release_date?.date
-            ? new Date(b.release_date.date).getTime()
-            : 0;
-          return dateB - dateA;
-        });
-        break;
-    }
-
-    const paginatedGames = validGames.slice(
-      (page - 1) * perPage,
-      page * perPage
-    );
+    const pageGames = filtered.slice((page - 1) * perPage, page * perPage);
 
     res.json({
-      total: validGames.length,
+      cached,
+      total: filtered.length,
       page,
       perPage,
-      games: paginatedGames,
+      games: pageGames,
     });
   } catch (error) {
+    console.error("Search error:", error);
     res.status(500).json({ error: "Failed to fetch games" });
   }
 });
@@ -175,18 +148,24 @@ app.get("/games/search", async (req, res) => {
 app.get("/games", async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const perPage = Math.min(100, parseInt(req.query.perPage as string) || 16);
+
   try {
-    const allGames = await getCachedOrFetch(
-      "appList",
-      async () => (await axios.get(STEAM_APP_LIST_URL)).data.applist.apps
-    );
+    const allGames = await getAppList();
+
+    if (!Array.isArray(allGames) || allGames.length === 0) {
+      return res
+        .status(503)
+        .json({ error: "App list not ready, please retry in a moment" });
+    }
+
     res.json({
       total: allGames.length,
       page,
       perPage,
       games: allGames.slice((page - 1) * perPage, page * perPage),
     });
-  } catch {
+  } catch (error) {
+    console.error("Games list error:", error);
     res.status(500).json({ error: "Failed to fetch games list" });
   }
 });
