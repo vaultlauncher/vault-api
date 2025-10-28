@@ -3,6 +3,8 @@ import axios from "axios";
 import NodeCache from "node-cache";
 import cors from "cors";
 import fs from "fs/promises";
+import dotenv from "dotenv";
+dotenv.config();
 
 const app = express();
 app.use(cors());
@@ -22,6 +24,8 @@ const STEAM_FEATURED_CATEGORIES_URL =
   "https://store.steampowered.com/api/featuredcategories/";
 const STEAM_CONCURRENT_PLAYERS_URL =
   "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/";
+const STEAMGRIDDB_API_KEY = process.env.STEAMGRIDDB_API_KEY;
+const STEAMGRIDDB_BASE_URL = "https://www.steamgriddb.com/api/v2";
 
 let appListReady = false;
 async function initAppList() {
@@ -102,6 +106,76 @@ async function fetchAppDetails(appid: number) {
   }
 }
 
+async function fetchSteamGridAssets(
+  appid: number,
+  assetType: "logos" | "heroes"
+) {
+  const cacheKey = `${assetType}_${appid}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
+  if (!STEAMGRIDDB_API_KEY) {
+    console.error("SteamGridDB API key not configured");
+    return [];
+  }
+
+  try {
+    const searchResp = await axios.get(
+      `${STEAMGRIDDB_BASE_URL}/games/steam/${appid}`,
+      {
+        headers: { Authorization: `Bearer ${STEAMGRIDDB_API_KEY}` },
+        timeout: 5000,
+      }
+    );
+
+    if (!searchResp.data.success || !searchResp.data.data) {
+      console.log(`No SteamGridDB entry found for appid ${appid}`);
+      cache.set(cacheKey, []);
+      return [];
+    }
+
+    const gameId = searchResp.data.data.id;
+
+    const assetsResp = await axios.get(
+      `${STEAMGRIDDB_BASE_URL}/${assetType}/game/${gameId}`,
+      {
+        headers: { Authorization: `Bearer ${STEAMGRIDDB_API_KEY}` },
+        timeout: 5000,
+        params: {
+          // Optional: add filters for better results
+          // types: 'official,white',
+          // styles: 'official'
+        },
+      }
+    );
+
+    const assets = assetsResp.data.success ? assetsResp.data.data || [] : [];
+    cache.set(cacheKey, assets, 86400); // Cache for 24 hours
+    return assets;
+  } catch (error: any) {
+    if (error.response?.status === 404) {
+      console.log(`Game ${appid} not found in SteamGridDB`);
+      cache.set(cacheKey, [], 3600); // Cache empty result for 1 hour
+      return [];
+    }
+
+    if (error.response?.status === 401) {
+      console.error("SteamGridDB API key is invalid");
+      return [];
+    }
+
+    console.error(`Failed to fetch ${assetType} for ${appid}:`, error.message);
+    return [];
+  }
+}
+
+async function fetchLogos(appid: number) {
+  return fetchSteamGridAssets(appid, "logos");
+}
+
+async function fetchHeroes(appid: number) {
+  return fetchSteamGridAssets(appid, "heroes");
+}
 app.get("/", (_, res) =>
   res.send(
     '<!DOCTYPE html><html><head><title>Vault Launcher</title><meta name="color-scheme" content="dark light"></head><body><3</body></html>'
@@ -228,6 +302,33 @@ app.get("/games/:appid", async (req, res) => {
     else res.status(404).json({ error: "Game not found" });
   } catch {
     res.status(500).json({ error: "Failed to fetch game details" });
+  }
+});
+
+app.get("/games/:appid/logos", async (req, res) => {
+  const { appid } = req.params;
+  const appidNum = parseInt(appid);
+  if (isNaN(appidNum)) {
+    return res.status(400).json({ error: "Invalid appid" });
+  }
+  try {
+    const logos = await fetchLogos(appidNum);
+    res.json({ logos });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch logos" });
+  }
+});
+app.get("/games/:appid/heroes", async (req, res) => {
+  const { appid } = req.params;
+  const appidNum = parseInt(appid);
+  if (isNaN(appidNum)) {
+    return res.status(400).json({ error: "Invalid appid" });
+  }
+  try {
+    const heroes = await fetchHeroes(appidNum);
+    res.json({ heroes });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch heroes" });
   }
 });
 
