@@ -11,7 +11,7 @@ app.use(cors());
 app.disable("x-powered-by");
 app.use(express.json());
 
-const port = process.env.PORT || 3000;
+const port = Number(process.env.PORT) || 3000;
 const cache = new NodeCache({ stdTTL: 18000 });
 const APP_LIST_FILE = "app_list.json";
 
@@ -332,4 +332,6 @@ app.get("/games/:appid/heroes", async (req, res) => {
   }
 });
 
-app.listen(port, () => console.log(`Vault API server running on port ${port}`));
+app.listen(port, "0.0.0.0", () => {
+  console.log(`Vault API server running on port ${port}`);
+});
