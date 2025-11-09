@@ -16,20 +16,40 @@ The API fetches Steam app list on startup and caches it locally. Updates daily.
 
 ### GET /
 
-Returns a simple HTML landing page.
+Returns API information and server statistics.
 
-**Response:** HTML page
+**Response (200):**
+
+```json
+{
+  "name": "Vault API",
+  "version": "0.1.0",
+  "description": "A REST API for Vault Launcher to access Steam games data, including search, details, and assets",
+  "stats": {
+    "totalGames": 276360,
+    "appListReady": true,
+    "cacheStats": {
+      "keys": 251,
+      "hits": 455,
+      "misses": 341
+    },
+    "uptime": 494.4259986
+  }
+}
+```
 
 ### GET /games/search
 
 Search games using fuzzy matching. Supports partial matches, abbreviations, and multi-word queries.
 
 **Query Parameters:**
+
 - `q` (string, required): Search query (min 3 chars)
 - `page` (integer, optional): Page number (default 1, min 1)
 - `perPage` (integer, optional): Items per page (default 16, max 100)
 
 **Response (200):**
+
 ```json
 {
   "total": 123,
@@ -46,6 +66,7 @@ Search games using fuzzy matching. Supports partial matches, abbreviations, and 
 ```
 
 **Error Responses:**
+
 - 400: Missing or invalid query
 - 503: App list not ready
 
@@ -54,10 +75,12 @@ Search games using fuzzy matching. Supports partial matches, abbreviations, and 
 List all Steam games with pagination.
 
 **Query Parameters:**
+
 - `page` (integer, optional): Page number (default 1, min 1)
 - `perPage` (integer, optional): Items per page (default 16, max 100)
 
 **Response (200):**
+
 ```json
 {
   "total": 12345,
@@ -73,6 +96,7 @@ List all Steam games with pagination.
 ```
 
 **Error Responses:**
+
 - 503: App list not ready
 
 ### GET /games/hot
@@ -82,6 +106,7 @@ Get currently featured/hot games from Steam specials.
 **Response (200):** Array of detailed game objects (up to 46 items)
 
 **Error Responses:**
+
 - 500: Failed to fetch data
 
 ### GET /games/top
@@ -91,6 +116,7 @@ Get top selling games from Steam.
 **Response (200):** Array of detailed game objects (up to 40 items)
 
 **Error Responses:**
+
 - 500: Failed to fetch data
 
 ### GET /games/:appid
@@ -98,11 +124,13 @@ Get top selling games from Steam.
 Get detailed information for a specific game.
 
 **Path Parameters:**
+
 - `appid` (integer, required): Steam App ID
 
 **Response (200):** Full game details object from Steam API
 
 **Error Responses:**
+
 - 404: Game not found
 - 500: Failed to fetch data
 
@@ -111,9 +139,11 @@ Get detailed information for a specific game.
 Get logo assets for a game from SteamGridDB.
 
 **Path Parameters:**
+
 - `appid` (integer, required): Steam App ID
 
 **Response (200):**
+
 ```json
 {
   "logos": [
@@ -128,6 +158,7 @@ Get logo assets for a game from SteamGridDB.
 ```
 
 **Error Responses:**
+
 - 400: Invalid appid
 - 500: Failed to fetch data
 
@@ -136,9 +167,11 @@ Get logo assets for a game from SteamGridDB.
 Get hero/banner images for a game from SteamGridDB.
 
 **Path Parameters:**
+
 - `appid` (integer, required): Steam App ID
 
 **Response (200):**
+
 ```json
 {
   "heroes": [
@@ -153,12 +186,14 @@ Get hero/banner images for a game from SteamGridDB.
 ```
 
 **Error Responses:**
+
 - 400: Invalid appid
 - 500: Failed to fetch data
 
 ## Data Structures
 
 ### Basic Game Object
+
 ```json
 {
   "appid": 570,
@@ -167,9 +202,11 @@ Get hero/banner images for a game from SteamGridDB.
 ```
 
 ### Detailed Game Object
+
 Full Steam app details including price, screenshots, etc. (varies by game).
 
 ### Asset Object (Logos/Heroes)
+
 ```json
 {
   "id": 123,
@@ -191,6 +228,7 @@ Full Steam app details including price, screenshots, etc. (varies by game).
 ## Search Algorithm
 
 Uses Fuse.js with custom scoring:
+
 - Exact matches: Highest priority
 - Starts with query: High priority
 - Contains query: Medium priority
@@ -200,21 +238,25 @@ Uses Fuse.js with custom scoring:
 ## Examples
 
 Search for "dota":
+
 ```
 GET /games/search?q=dota
 ```
 
 Get page 2 of all games:
+
 ```
 GET /games?page=2&perPage=50
 ```
 
 Get Dota 2 details:
+
 ```
 GET /games/570
 ```
 
 Get Dota 2 logos:
+
 ```
 GET /games/570/logos
 ```

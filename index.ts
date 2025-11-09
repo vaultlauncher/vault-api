@@ -10,7 +10,6 @@ dotenv.config();
 
 const app = express();
 app.use(cors());
-app.disable("x-powered-by");
 app.use(express.json());
 
 const port = Number(process.env.PORT) || 3000;
@@ -182,11 +181,26 @@ function scoreMatch(
   return score;
 }
 
-app.get("/", (_, res) =>
-  res.send(
-    '<!DOCTYPE html><html><head><title>Vault Launcher</title><meta name="color-scheme" content="dark light"></head><body><3</body></html>'
-  )
-);
+app.get("/", (_, res) => {
+  const stats = {
+    totalGames: steamApps.length,
+    appListReady,
+    cacheStats: {
+      keys: cache.keys().length,
+      hits: cache.getStats().hits,
+      misses: cache.getStats().misses,
+    },
+    uptime: process.uptime(),
+  };
+
+  res.json({
+    name: "Vault API",
+    version: "0.1.0",
+    description:
+      "A REST API for Vault Launcher to access Steam games data, including search, details, and assets",
+    stats,
+  });
+});
 
 app.get("/games/search", async (req, res) => {
   const query = ((req.query.q as string) || "").trim();
@@ -233,10 +247,13 @@ app.get("/games/search", async (req, res) => {
       cache.set(cacheKey, filtered, 300);
     }
 
+    const totalPages = Math.ceil(filtered.length / perPage);
+
     res.json({
       total: filtered.length,
       page,
       perPage,
+      totalPages,
       games: filtered.slice((page - 1) * perPage, page * perPage),
     });
   } catch (error) {
