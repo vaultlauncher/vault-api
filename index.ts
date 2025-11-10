@@ -101,7 +101,7 @@ async function getCachedOrFetch(key: string, fetchFn: () => Promise<any>) {
 async function fetchAppDetails(appid: number) {
   return getCachedOrFetch(`appDetails_${appid}`, async () => {
     const response = await axios.get(STEAM_APP_DETAILS_URL, {
-      params: { appids: appid },
+      params: { appids: appid, l: 'english' },
     });
     return response.data[appid];
   });
@@ -148,39 +148,6 @@ async function fetchSteamGridAssets(
   }
 }
 
-function scoreMatch(
-  name: string,
-  query: string,
-  queryWords: string[],
-  fuseScore: number
-) {
-  let score = (1 - fuseScore) * 10;
-
-  if (name === query) score = 100000;
-  else if (name.startsWith(query)) score = 50000 + score;
-  else if (name.startsWith(query + " ")) score = 40000 + score;
-  else if (name.includes(` ${query} `) || name.endsWith(` ${query}`))
-    score = 20000 + score;
-  else if (name.includes(query)) score = 10000 + score;
-  else if (queryWords.length > 1) {
-    let lastIndex = -1;
-    const inOrder = queryWords.every((word) => {
-      const idx = name.indexOf(word, lastIndex + 1);
-      if (idx > lastIndex) {
-        lastIndex = idx;
-        return true;
-      }
-      return false;
-    });
-    if (inOrder) score = 5000 + score;
-  }
-
-  score -= Math.max(0, name.length - 50);
-  if (name.length < 20) score += (20 - name.length) * 10;
-
-  return score;
-}
-
 app.get("/", (_, res) => {
   const stats = {
     totalGames: steamApps.length,
@@ -221,28 +188,29 @@ app.get("/games/search", async (req, res) => {
     if (!filtered) {
       const queryLower = query.toLowerCase();
       const queryWords = queryLower.split(/\s+/).filter((w) => w.length > 0);
+      const maxResults = 200;
 
-      filtered = fuseInstance
-        .search(query, { limit: 2000 })
+      const results = fuseInstance.search(query, { limit: maxResults });
+
+      filtered = results
         .filter((r) => {
-          if ((r.score || 1) > 0.5) return false;
-          if (
-            queryWords.length > 1 &&
-            !queryWords.every((w) => r.item.lowerName.includes(w))
-          )
-            return false;
+          if ((r.score || 1) > 0.4) return false;
+
+          if (queryWords.length > 1) {
+            return queryWords.every((w) => r.item.lowerName.includes(w));
+          }
           return true;
         })
         .map((r) => ({
           ...r.item,
-          relevanceScore: scoreMatch(
+          relevanceScore: calculateSimpleScore(
             r.item.lowerName,
             queryLower,
-            queryWords,
             r.score || 0
           ),
         }))
-        .sort((a, b) => b.relevanceScore - a.relevanceScore);
+        .sort((a, b) => b.relevanceScore - a.relevanceScore)
+        .slice(0, 100);
 
       cache.set(cacheKey, filtered, 300);
     }
@@ -261,6 +229,24 @@ app.get("/games/search", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch games" });
   }
 });
+
+function calculateSimpleScore(name: string, query: string, fuseScore: number) {
+  let score = (1 - fuseScore) * 100;
+
+  if (name === query) return 100000;
+
+  if (name.startsWith(query)) return 50000 + score;
+
+  if (name.includes(` ${query} `) || name.endsWith(` ${query}`)) {
+    return 20000 + score;
+  }
+
+  if (name.includes(query)) return 10000 + score;
+
+  if (name.length < 30) score += (30 - name.length) * 5;
+
+  return score;
+}
 
 app.get("/games", async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
