@@ -1,0 +1,10 @@
+services:
+  vault-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - STEAMGRIDDB_API_KEY=${STEAMGRIDDB_API_KEY}
+    restart: unless-stopped
