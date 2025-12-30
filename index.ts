@@ -1,33 +1,47 @@
-import express from "express";
-import axios from "axios";
-import NodeCache from "node-cache";
-import cors from "cors";
-import fs from "fs/promises";
-import dotenv from "dotenv";
+import { Elysia, t } from "elysia";
+import { cors } from "@elysiajs/cors";
 import Fuse from "fuse.js";
 
-dotenv.config();
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
 const port = Number(process.env.PORT) || 3000;
-const cache = new NodeCache({ stdTTL: 18000 });
 const APP_LIST_FILE = "app_list.json";
 
 let steamApps: any[] = [];
 let fuseInstance: Fuse<any> | null = null;
+let appListReady = false;
+
+const cache = new Map<string, { data: any; expiry: number }>();
 
 const STEAM_APP_LIST_URL =
-  "https://api.steampowered.com/ISteamApps/GetAppList/v2/";
+  "https://api.steampowered.com/IStoreService/GetAppList/v1/?key=8FBD888B49892ECFA3BE6ED4D7D0F1DD&max_results=600000&last_appid=0";
 const STEAM_APP_DETAILS_URL = "https://store.steampowered.com/api/appdetails";
 const STEAM_FEATURED_CATEGORIES_URL =
   "https://store.steampowered.com/api/featuredcategories/";
 const STEAMGRIDDB_API_KEY = process.env.STEAMGRIDDB_API_KEY;
 const STEAMGRIDDB_BASE_URL = "https://www.steamgriddb.com/api/v2";
 
-let appListReady = false;
+// Cache utilities
+function setCache(key: string, data: any, ttl: number = 18000) {
+  cache.set(key, {
+    data,
+    expiry: Date.now() + ttl * 1000,
+  });
+}
+
+function getCache(key: string): any | null {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (Date.now() > cached.expiry) {
+    cache.delete(key);
+    return null;
+  }
+  return cached.data;
+}
+
+function getCacheStats() {
+  let hits = 0;
+  let misses = 0;
+  return { keys: cache.size, hits, misses };
+}
 
 function prepareApps(appList: any[]) {
   appList.forEach((g: any) => {
@@ -59,7 +73,8 @@ function createFuseIndex(apps: any[]) {
 async function initAppList() {
   try {
     try {
-      const data = await fs.readFile(APP_LIST_FILE, "utf8");
+      const file = Bun.file(APP_LIST_FILE);
+      const data = await file.text();
       steamApps = prepareApps(JSON.parse(data));
       fuseInstance = createFuseIndex(steamApps);
       appListReady = true;
@@ -68,11 +83,12 @@ async function initAppList() {
     } catch {}
 
     console.log("Fetching Steam app list...");
-    const response = await axios.get(STEAM_APP_LIST_URL);
-    steamApps = prepareApps(response.data.applist.apps);
+    const response = await fetch(STEAM_APP_LIST_URL);
+    const json = await response.json();
+    steamApps = prepareApps(json.response.apps);
     fuseInstance = createFuseIndex(steamApps);
     appListReady = true;
-    await fs.writeFile(APP_LIST_FILE, JSON.stringify(steamApps));
+    await Bun.write(APP_LIST_FILE, JSON.stringify(steamApps));
     console.log(`App list cached and saved: ${steamApps.length} games`);
   } catch (error) {
     console.error("Failed to fetch app list:", error);
@@ -91,19 +107,20 @@ async function getAppList(): Promise<any[]> {
 }
 
 async function getCachedOrFetch(key: string, fetchFn: () => Promise<any>) {
-  const cached = cache.get(key);
+  const cached = getCache(key);
   if (cached) return cached;
   const data = await fetchFn();
-  cache.set(key, data);
+  setCache(key, data);
   return data;
 }
 
 async function fetchAppDetails(appid: number) {
   return getCachedOrFetch(`appDetails_${appid}`, async () => {
-    const response = await axios.get(STEAM_APP_DETAILS_URL, {
-      params: { appids: appid, l: 'english' },
-    });
-    return response.data[appid];
+    const response = await fetch(
+      `${STEAM_APP_DETAILS_URL}?appids=${appid}&l=english`
+    );
+    const data = await response.json();
+    return data[appid];
   });
 }
 
@@ -112,123 +129,45 @@ async function fetchSteamGridAssets(
   assetType: "logos" | "heroes"
 ) {
   const cacheKey = `${assetType}_${appid}`;
-  const cached = cache.get(cacheKey);
+  const cached = getCache(cacheKey);
   if (cached) return cached;
 
   if (!STEAMGRIDDB_API_KEY) return [];
 
   try {
-    const searchResp = await axios.get(
+    const searchResp = await fetch(
       `${STEAMGRIDDB_BASE_URL}/games/steam/${appid}`,
       {
         headers: { Authorization: `Bearer ${STEAMGRIDDB_API_KEY}` },
-        timeout: 5000,
+        signal: AbortSignal.timeout(5000),
       }
     );
 
-    if (!searchResp.data.success) {
-      cache.set(cacheKey, []);
+    const searchData = await searchResp.json();
+
+    if (!searchData.success) {
+      setCache(cacheKey, []);
       return [];
     }
 
-    const assetsResp = await axios.get(
-      `${STEAMGRIDDB_BASE_URL}/${assetType}/game/${searchResp.data.data.id}`,
+    const assetsResp = await fetch(
+      `${STEAMGRIDDB_BASE_URL}/${assetType}/game/${searchData.data.id}`,
       {
         headers: { Authorization: `Bearer ${STEAMGRIDDB_API_KEY}` },
-        timeout: 5000,
+        signal: AbortSignal.timeout(5000),
       }
     );
 
-    const assets = assetsResp.data.success ? assetsResp.data.data || [] : [];
-    cache.set(cacheKey, assets, 86400);
+    const assetsData = await assetsResp.json();
+
+    const assets = assetsData.success ? assetsData.data || [] : [];
+    setCache(cacheKey, assets, 86400);
     return assets;
   } catch (error: any) {
-    cache.set(cacheKey, [], error.response?.status === 404 ? 3600 : 0);
+    setCache(cacheKey, [], error.status === 404 ? 3600 : 0);
     return [];
   }
 }
-
-app.get("/", (_, res) => {
-  const stats = {
-    totalGames: steamApps.length,
-    appListReady,
-    cacheStats: {
-      keys: cache.keys().length,
-      hits: cache.getStats().hits,
-      misses: cache.getStats().misses,
-    },
-    uptime: process.uptime(),
-  };
-
-  res.json({
-    name: "Vault API",
-    version: "0.1.0",
-    description:
-      "A REST API for Vault Launcher to access Steam games data, including search, details, and assets",
-    stats,
-  });
-});
-
-app.get("/games/search", async (req, res) => {
-  const query = ((req.query.q as string) || "").trim();
-  if (!query) return res.status(400).json({ error: "Search query required" });
-
-  const page = Math.max(1, parseInt(req.query.page as string) || 1);
-  const perPage = Math.min(100, parseInt(req.query.perPage as string) || 16);
-
-  try {
-    const allGames = await getAppList();
-    if (!allGames?.length || !fuseInstance) {
-      return res.status(503).json({ error: "App list not ready" });
-    }
-
-    const cacheKey = `search_${query.toLowerCase()}`;
-    let filtered: any = cache.get(cacheKey);
-
-    if (!filtered) {
-      const queryLower = query.toLowerCase();
-      const queryWords = queryLower.split(/\s+/).filter((w) => w.length > 0);
-      const maxResults = 200;
-
-      const results = fuseInstance.search(query, { limit: maxResults });
-
-      filtered = results
-        .filter((r) => {
-          if ((r.score || 1) > 0.4) return false;
-
-          if (queryWords.length > 1) {
-            return queryWords.every((w) => r.item.lowerName.includes(w));
-          }
-          return true;
-        })
-        .map((r) => ({
-          ...r.item,
-          relevanceScore: calculateSimpleScore(
-            r.item.lowerName,
-            queryLower,
-            r.score || 0
-          ),
-        }))
-        .sort((a, b) => b.relevanceScore - a.relevanceScore)
-        .slice(0, 100);
-
-      cache.set(cacheKey, filtered, 300);
-    }
-
-    const totalPages = Math.ceil(filtered.length / perPage);
-
-    res.json({
-      total: filtered.length,
-      page,
-      perPage,
-      totalPages,
-      games: filtered.slice((page - 1) * perPage, page * perPage),
-    });
-  } catch (error) {
-    console.error("Search error:", error);
-    res.status(500).json({ error: "Failed to fetch games" });
-  }
-});
 
 function calculateSimpleScore(name: string, query: string, fuseScore: number) {
   let score = (1 - fuseScore) * 100;
@@ -248,94 +187,219 @@ function calculateSimpleScore(name: string, query: string, fuseScore: number) {
   return score;
 }
 
-app.get("/games", async (req, res) => {
-  const page = Math.max(1, parseInt(req.query.page as string) || 1);
-  const perPage = Math.min(100, parseInt(req.query.perPage as string) || 16);
+const app = new Elysia()
+  .use(cors())
+  .get("/", () => ({
+    name: "Vault API",
+    version: "0.1.0",
+    description:
+      "A REST API for Vault Launcher to access Steam games data, including search, details, and assets",
+    stats: {
+      totalGames: steamApps.length,
+      appListReady,
+      cacheStats: {
+        keys: cache.size,
+        hits: getCacheStats().hits,
+        misses: getCacheStats().misses,
+      },
+      uptime: process.uptime(),
+    },
+  }))
+  .get(
+    "/games/search",
+    async ({ query, error }) => {
+      const q = (query.q || "").trim();
+      if (!q) return error(400, { error: "Search query required" });
 
-  try {
-    const allGames = await getAppList();
-    if (!allGames?.length)
-      return res.status(503).json({ error: "App list not ready" });
+      const page = Math.max(1, parseInt(query.page as string) || 1);
+      const perPage = Math.min(100, parseInt(query.perPage as string) || 16);
 
-    res.json({
-      total: allGames.length,
-      page,
-      perPage,
-      games: allGames.slice((page - 1) * perPage, page * perPage),
-    });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch games list" });
-  }
-});
+      try {
+        const allGames = await getAppList();
+        if (!allGames?.length || !fuseInstance) {
+          return error(503, { error: "App list not ready" });
+        }
 
-app.get("/games/hot", async (req, res) => {
-  try {
-    const categories = await getCachedOrFetch(
-      "featuredCategories",
-      async () => (await axios.get(STEAM_FEATURED_CATEGORIES_URL)).data
-    );
-    const items = (categories.specials?.items || []).slice(0, 46);
-    const detailed = await Promise.all(
-      items.map(async (g: any) => {
-        const data = await fetchAppDetails(g.id || g.appid);
-        return data?.success ? data.data : null;
-      })
-    );
-    res.json(detailed.filter(Boolean));
-  } catch {
-    res.status(500).json({ error: "Failed to fetch hot games" });
-  }
-});
+        const cacheKey = `search_${q.toLowerCase()}`;
+        let filtered: any = getCache(cacheKey);
 
-app.get("/games/top", async (req, res) => {
-  try {
-    const categories = await getCachedOrFetch(
-      "featuredCategories",
-      async () => (await axios.get(STEAM_FEATURED_CATEGORIES_URL)).data
-    );
-    const items = (categories.top_sellers?.items || []).slice(0, 40);
-    const detailed = await Promise.all(
-      items.map(async (g: any) => {
-        const data = await fetchAppDetails(g.id || g.appid);
-        return data?.success ? data.data : null;
-      })
-    );
-    res.json(detailed.filter(Boolean));
-  } catch {
-    res.status(500).json({ error: "Failed to fetch top games" });
-  }
-});
+        if (!filtered) {
+          const queryLower = q.toLowerCase();
+          const queryWords = queryLower
+            .split(/\s+/)
+            .filter((w) => w.length > 0);
+          const maxResults = 200;
 
-app.get("/games/:appid", async (req, res) => {
-  try {
-    const data = await fetchAppDetails(parseInt(req.params.appid));
-    if (data?.success) res.json(data.data);
-    else res.status(404).json({ error: "Game not found" });
-  } catch {
-    res.status(500).json({ error: "Failed to fetch game details" });
-  }
-});
+          const results = fuseInstance.search(q, { limit: maxResults });
 
-app.get("/games/:appid/logos", async (req, res) => {
-  const appid = parseInt(req.params.appid);
-  if (isNaN(appid)) return res.status(400).json({ error: "Invalid appid" });
-  try {
-    res.json({ logos: await fetchSteamGridAssets(appid, "logos") });
-  } catch {
-    res.status(500).json({ error: "Failed to fetch logos" });
-  }
-});
+          filtered = results
+            .filter((r) => {
+              if ((r.score || 1) > 0.4) return false;
 
-app.get("/games/:appid/heroes", async (req, res) => {
-  const appid = parseInt(req.params.appid);
-  if (isNaN(appid)) return res.status(400).json({ error: "Invalid appid" });
-  try {
-    res.json({ heroes: await fetchSteamGridAssets(appid, "heroes") });
-  } catch {
-    res.status(500).json({ error: "Failed to fetch heroes" });
-  }
-});
+              if (queryWords.length > 1) {
+                return queryWords.every((w) => r.item.lowerName.includes(w));
+              }
+              return true;
+            })
+            .map((r) => ({
+              ...r.item,
+              relevanceScore: calculateSimpleScore(
+                r.item.lowerName,
+                queryLower,
+                r.score || 0
+              ),
+            }))
+            .sort((a, b) => b.relevanceScore - a.relevanceScore)
+            .slice(0, 100);
 
-app.listen(port, "0.0.0.0", () => {
-  console.log(`Vault API server running on port ${port}`);
-});
+          setCache(cacheKey, filtered, 300);
+        }
+
+        const totalPages = Math.ceil(filtered.length / perPage);
+
+        return {
+          total: filtered.length,
+          page,
+          perPage,
+          totalPages,
+          games: filtered.slice((page - 1) * perPage, page * perPage),
+        };
+      } catch (err) {
+        console.error("Search error:", err);
+        return error(500, { error: "Failed to fetch games" });
+      }
+    },
+    {
+      query: t.Object({
+        q: t.Optional(t.String()),
+        page: t.Optional(t.String()),
+        perPage: t.Optional(t.String()),
+      }),
+    }
+  )
+  .get(
+    "/games",
+    async ({ query, error }) => {
+      const page = Math.max(1, parseInt(query.page as string) || 1);
+      const perPage = Math.min(100, parseInt(query.perPage as string) || 16);
+
+      try {
+        const allGames = await getAppList();
+        if (!allGames?.length)
+          return error(503, { error: "App list not ready" });
+
+        return {
+          total: allGames.length,
+          page,
+          perPage,
+          games: allGames.slice((page - 1) * perPage, page * perPage),
+        };
+      } catch (err) {
+        return error(500, { error: "Failed to fetch games list" });
+      }
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        perPage: t.Optional(t.String()),
+      }),
+    }
+  )
+  .get("/games/hot", async ({ error }) => {
+    try {
+      const categories = await getCachedOrFetch(
+        "featuredCategories",
+        async () => {
+          const response = await fetch(STEAM_FEATURED_CATEGORIES_URL);
+          return await response.json();
+        }
+      );
+      const items = (categories.specials?.items || []).slice(0, 46);
+      const detailed = await Promise.all(
+        items.map(async (g: any) => {
+          const data = await fetchAppDetails(g.id || g.appid);
+          return data?.success ? data.data : null;
+        })
+      );
+      return detailed.filter(Boolean);
+    } catch (err) {
+      return error(500, { error: "Failed to fetch hot games" });
+    }
+  })
+  .get("/games/top", async ({ error }) => {
+    try {
+      const categories = await getCachedOrFetch(
+        "featuredCategories",
+        async () => {
+          const response = await fetch(STEAM_FEATURED_CATEGORIES_URL);
+          return await response.json();
+        }
+      );
+      const items = (categories.top_sellers?.items || []).slice(0, 40);
+      const detailed = await Promise.all(
+        items.map(async (g: any) => {
+          const data = await fetchAppDetails(g.id || g.appid);
+          return data?.success ? data.data : null;
+        })
+      );
+      return detailed.filter(Boolean);
+    } catch (err) {
+      return error(500, { error: "Failed to fetch top games" });
+    }
+  })
+  .get(
+    "/games/:appid",
+    async ({ params, error }) => {
+      try {
+        const data = await fetchAppDetails(parseInt(params.appid));
+        if (data?.success) return data.data;
+        else return error(404, { error: "Game not found" });
+      } catch (err) {
+        return error(500, { error: "Failed to fetch game details" });
+      }
+    },
+    {
+      params: t.Object({
+        appid: t.String(),
+      }),
+    }
+  )
+  .get(
+    "/games/:appid/logos",
+    async ({ params, error }) => {
+      const appid = parseInt(params.appid);
+      if (isNaN(appid)) return error(400, { error: "Invalid appid" });
+      try {
+        return { logos: await fetchSteamGridAssets(appid, "logos") };
+      } catch (err) {
+        return error(500, { error: "Failed to fetch logos" });
+      }
+    },
+    {
+      params: t.Object({
+        appid: t.String(),
+      }),
+    }
+  )
+  .get(
+    "/games/:appid/heroes",
+    async ({ params, error }) => {
+      const appid = parseInt(params.appid);
+      if (isNaN(appid)) return error(400, { error: "Invalid appid" });
+      try {
+        return { heroes: await fetchSteamGridAssets(appid, "heroes") };
+      } catch (err) {
+        return error(500, { error: "Failed to fetch heroes" });
+      }
+    },
+    {
+      params: t.Object({
+        appid: t.String(),
+      }),
+    }
+  )
+  .listen(port);
+
+console.log(
+  `🦊 Vault API server running at ${app.server?.hostname}:${app.server?.port}`
+);

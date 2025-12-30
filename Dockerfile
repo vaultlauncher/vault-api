@@ -1,29 +1,17 @@
-# Stage 1: Build
-FROM node:22-alpine AS builder
+FROM oven/bun:1 AS builder
 WORKDIR /app
-
-# Copy everything except node_modules first
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile
 COPY . .
 
-# Install dependencies (including devDependencies)
-RUN npm install
-
-# Build TypeScript
-RUN npx tsc
-
-# Stage 2: Production image
-FROM node:22-alpine
+FROM oven/bun:1-slim
 WORKDIR /app
-
-# Copy only package.json & lockfile for production install
-COPY package*.json ./
-RUN npm install --omit=dev
-
-# Copy compiled code & runtime dependencies
-COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/*.ts ./
+COPY --from=builder /app/*.json ./
 
 ENV PORT=3000
-
 EXPOSE 3000
-CMD ["node", "dist/index.js"]
+
+CMD ["bun", "run", "index.ts"]
