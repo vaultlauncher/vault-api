@@ -45,10 +45,12 @@ function getCacheStats() {
 
 function prepareApps(appList: any[]) {
   appList.forEach((g: any) => {
-    g.lowerName = g.name.toLowerCase();
+    g.lowerName = g.name
+      .toLowerCase()
+      .replace(/[®™©:'".,\-_]/g, "");
     g.searchName = g.name
       .toLowerCase()
-      .replace(/[®™©:]/g, "")
+      .replace(/[®™©:'".,\-_]/g, "")
       .replace(/\s+/g, " ")
       .trim();
   });
