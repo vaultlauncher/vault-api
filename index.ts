@@ -12,7 +12,7 @@ let appListReady = false;
 const cache = new Map<string, { data: any; expiry: number }>();
 
 const STEAM_APP_LIST_URL =
-  "https://api.steampowered.com/IStoreService/GetAppList/v1/?key=8FBD888B49892ECFA3BE6ED4D7D0F1DD&max_results=600000&last_appid=0";
+  "https://raw.githubusercontent.com/jsnli/steamappidlist/refs/heads/master/data/games_appid.json";
 const STEAM_APP_DETAILS_URL = "https://store.steampowered.com/api/appdetails";
 const STEAM_FEATURED_CATEGORIES_URL =
   "https://store.steampowered.com/api/featuredcategories/";
@@ -45,9 +45,7 @@ function getCacheStats() {
 
 function prepareApps(appList: any[]) {
   appList.forEach((g: any) => {
-    g.lowerName = g.name
-      .toLowerCase()
-      .replace(/[®™©:'".,\-_]/g, "");
+    g.lowerName = g.name.toLowerCase().replace(/[®™©:'".,\-_]/g, "");
     g.searchName = g.name
       .toLowerCase()
       .replace(/[®™©:'".,\-_]/g, "")
@@ -87,7 +85,8 @@ async function initAppList() {
     console.log("Fetching Steam app list...");
     const response = await fetch(STEAM_APP_LIST_URL);
     const json = await response.json();
-    steamApps = prepareApps(json.response.apps);
+    steamApps = prepareApps(json);
+    console.log(`Fetched ${steamApps.length} apps from Steam`);
     fuseInstance = createFuseIndex(steamApps);
     appListReady = true;
     await Bun.write(APP_LIST_FILE, JSON.stringify(steamApps));
