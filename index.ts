@@ -207,9 +207,9 @@ const app = new Elysia()
   }))
   .get(
     "/games/search",
-    async ({ query, error }) => {
+    async ({ query, status }) => {
       const q = (query.q || "").trim();
-      if (!q) return error(400, { error: "Search query required" });
+      if (!q) return status(400, { error: "Search query required" });
 
       const page = Math.max(1, parseInt(query.page as string) || 1);
       const perPage = Math.min(100, parseInt(query.perPage as string) || 16);
@@ -217,7 +217,7 @@ const app = new Elysia()
       try {
         const allGames = await getAppList();
         if (!allGames?.length || !fuseInstance) {
-          return error(503, { error: "App list not ready" });
+          return status(503, { error: "App list not ready" });
         }
 
         const cacheKey = `search_${q.toLowerCase()}`;
@@ -266,7 +266,7 @@ const app = new Elysia()
         };
       } catch (err) {
         console.error("Search error:", err);
-        return error(500, { error: "Failed to fetch games" });
+        return status(500, { error: "Failed to fetch games" });
       }
     },
     {
@@ -279,14 +279,14 @@ const app = new Elysia()
   )
   .get(
     "/games",
-    async ({ query, error }) => {
+    async ({ query, status }) => {
       const page = Math.max(1, parseInt(query.page as string) || 1);
       const perPage = Math.min(100, parseInt(query.perPage as string) || 16);
 
       try {
         const allGames = await getAppList();
         if (!allGames?.length)
-          return error(503, { error: "App list not ready" });
+          return status(503, { error: "App list not ready" });
 
         return {
           total: allGames.length,
@@ -295,7 +295,7 @@ const app = new Elysia()
           games: allGames.slice((page - 1) * perPage, page * perPage),
         };
       } catch (err) {
-        return error(500, { error: "Failed to fetch games list" });
+        return status(500, { error: "Failed to fetch games list" });
       }
     },
     {
@@ -305,7 +305,7 @@ const app = new Elysia()
       }),
     }
   )
-  .get("/games/hot", async ({ error }) => {
+  .get("/games/hot", async ({ status }) => {
     try {
       const categories = await getCachedOrFetch(
         "featuredCategories",
@@ -323,10 +323,10 @@ const app = new Elysia()
       );
       return detailed.filter(Boolean);
     } catch (err) {
-      return error(500, { error: "Failed to fetch hot games" });
+      return status(500, { error: "Failed to fetch hot games" });
     }
   })
-  .get("/games/top", async ({ error }) => {
+  .get("/games/top", async ({ status }) => {
     try {
       const categories = await getCachedOrFetch(
         "featuredCategories",
@@ -344,18 +344,18 @@ const app = new Elysia()
       );
       return detailed.filter(Boolean);
     } catch (err) {
-      return error(500, { error: "Failed to fetch top games" });
+      return status(500, { error: "Failed to fetch top games" });
     }
   })
   .get(
     "/games/:appid",
-    async ({ params, error }) => {
+    async ({ params, status }) => {
       try {
         const data = await fetchAppDetails(parseInt(params.appid));
         if (data?.success) return data.data;
-        else return error(404, { error: "Game not found" });
+        else return status(404, { error: "Game not found" });
       } catch (err) {
-        return error(500, { error: "Failed to fetch game details" });
+        return status(500, { error: "Failed to fetch game details" });
       }
     },
     {
@@ -366,13 +366,13 @@ const app = new Elysia()
   )
   .get(
     "/games/:appid/logos",
-    async ({ params, error }) => {
+    async ({ params, status }) => {
       const appid = parseInt(params.appid);
-      if (isNaN(appid)) return error(400, { error: "Invalid appid" });
+      if (isNaN(appid)) return status(400, { error: "Invalid appid" });
       try {
         return { logos: await fetchSteamGridAssets(appid, "logos") };
       } catch (err) {
-        return error(500, { error: "Failed to fetch logos" });
+        return status(500, { error: "Failed to fetch logos" });
       }
     },
     {
@@ -383,13 +383,13 @@ const app = new Elysia()
   )
   .get(
     "/games/:appid/heroes",
-    async ({ params, error }) => {
+    async ({ params, status }) => {
       const appid = parseInt(params.appid);
-      if (isNaN(appid)) return error(400, { error: "Invalid appid" });
+      if (isNaN(appid)) return status(400, { error: "Invalid appid" });
       try {
         return { heroes: await fetchSteamGridAssets(appid, "heroes") };
       } catch (err) {
-        return error(500, { error: "Failed to fetch heroes" });
+        return status(500, { error: "Failed to fetch heroes" });
       }
     },
     {
