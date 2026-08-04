@@ -11,6 +11,7 @@ export const user = pgTable(
     image: text("image"),
     username: text("username"),
     displayUsername: text("display_username"),
+    vaultPlus: boolean("vault_plus").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

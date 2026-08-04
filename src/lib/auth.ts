@@ -8,6 +8,15 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
   },
+  user: {
+    additionalFields: {
+      vaultPlus: {
+        type: "boolean",
+        required: false,
+        defaultValue: false,
+      },
+    },
+  },
   plugins: [bearer(), username()],
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
   trustedOrigins: [
