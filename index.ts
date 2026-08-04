@@ -1,6 +1,7 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import Fuse from "fuse.js";
+import { auth } from "./src/lib/auth";
 
 const port = Number(process.env.PORT) || 3000;
 const APP_LIST_FILE = "app_list.json";
@@ -189,7 +190,15 @@ function calculateSimpleScore(name: string, query: string, fuseScore: number) {
 }
 
 const app = new Elysia()
-  .use(cors())
+  .use(
+    cors({
+      origin: true,
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      credentials: true,
+      allowedHeaders: ["Content-Type", "Authorization"],
+    })
+  )
+  .mount(auth.handler)
   .get("/", () => ({
     name: "Vault API",
     version: "0.1.0",
