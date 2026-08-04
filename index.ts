@@ -196,6 +196,7 @@ const app = new Elysia()
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization"],
+      exposeHeaders: ["set-auth-token", "x-auth-token"],
     })
   )
   .mount(auth.handler)
