@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth/minimal";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { bearer } from "better-auth/plugins";
+import { bearer, username } from "better-auth/plugins";
 import { db } from "./db";
 
 export const auth = betterAuth({
@@ -8,7 +8,7 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
   },
-  plugins: [bearer()],
+  plugins: [bearer(), username()],
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
   trustedOrigins: [
     "http://localhost:5173",
