@@ -308,17 +308,25 @@ const app = new Elysia()
   )
   .get("/games/hot", async ({ status }) => {
     try {
-      const categories = await getCachedOrFetch(
-        "featuredCategories",
+      const search = await getCachedOrFetch(
+        "hotSearchResults",
         async () => {
-          const response = await fetch(STEAM_FEATURED_CATEGORIES_URL);
+          const response = await fetch(
+            "https://store.steampowered.com/search/results/?filter=globaltopsellers&ignore_preferences=1&json=1&hidef2p=1&category1=998"
+          );
           return await response.json();
         }
       );
-      const items = (categories.specials?.items || []).slice(0, 46);
+      const items = (search.items || []).slice(0, 46);
+      const appids = items
+        .map((g: any) => {
+          const match = g.logo?.match(/apps\/(\d+)/);
+          return match ? parseInt(match[1]) : g.appid || null;
+        })
+        .filter((id: any) => id !== null);
       const detailed = await Promise.all(
-        items.map(async (g: any) => {
-          const data = await fetchAppDetails(g.id || g.appid);
+        appids.map(async (id: number) => {
+          const data = await fetchAppDetails(id);
           return data?.success ? data.data : null;
         })
       );
