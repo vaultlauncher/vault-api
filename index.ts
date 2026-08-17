@@ -70,6 +70,20 @@ function createFuseIndex(apps: any[]) {
   });
 }
 
+async function fetchAndCacheAppList() {
+  console.log("Fetching Steam app list...");
+  const response = await fetch(STEAM_APP_LIST_URL);
+  if (!response.ok)
+    throw new Error(`Steam app list request failed (${response.status})`);
+  const json = await response.json();
+  steamApps = prepareApps(json);
+  console.log(`Fetched ${steamApps.length} apps from Steam`);
+  fuseInstance = createFuseIndex(steamApps);
+  appListReady = true;
+  await Bun.write(APP_LIST_FILE, JSON.stringify(steamApps));
+  console.log(`App list cached and saved: ${steamApps.length} games`);
+}
+
 async function initAppList() {
   try {
     try {
@@ -82,15 +96,7 @@ async function initAppList() {
       return;
     } catch {}
 
-    console.log("Fetching Steam app list...");
-    const response = await fetch(STEAM_APP_LIST_URL);
-    const json = await response.json();
-    steamApps = prepareApps(json);
-    console.log(`Fetched ${steamApps.length} apps from Steam`);
-    fuseInstance = createFuseIndex(steamApps);
-    appListReady = true;
-    await Bun.write(APP_LIST_FILE, JSON.stringify(steamApps));
-    console.log(`App list cached and saved: ${steamApps.length} games`);
+    await fetchAndCacheAppList();
   } catch (error) {
     console.error("Failed to fetch app list:", error);
     appListReady = false;
@@ -98,7 +104,16 @@ async function initAppList() {
 }
 
 initAppList();
-setInterval(initAppList, 86400000);
+setInterval(
+  () => {
+    fetchAndCacheAppList().catch((error) => {
+      console.error("Failed to refetch app list:", error);
+      appListReady = false;
+    });
+  },
+  5 * 60 * 60 * 1000,
+);
+setInterval(initAppList, 5 * 60 * 60 * 1000);
 
 async function getAppList(): Promise<any[]> {
   if (!steamApps?.length) {
@@ -118,7 +133,7 @@ async function getCachedOrFetch(key: string, fetchFn: () => Promise<any>) {
 async function fetchAppDetails(appid: number) {
   return getCachedOrFetch(`appDetails_${appid}`, async () => {
     const response = await fetch(
-      `${STEAM_APP_DETAILS_URL}?appids=${appid}&l=english`
+      `${STEAM_APP_DETAILS_URL}?appids=${appid}&l=english`,
     );
     const data = await response.json();
     return data[appid];
@@ -127,7 +142,7 @@ async function fetchAppDetails(appid: number) {
 
 async function fetchSteamGridAssets(
   appid: number,
-  assetType: "logos" | "heroes"
+  assetType: "logos" | "heroes",
 ) {
   const cacheKey = `${assetType}_${appid}`;
   const cached = getCache(cacheKey);
@@ -141,7 +156,7 @@ async function fetchSteamGridAssets(
       {
         headers: { Authorization: `Bearer ${STEAMGRIDDB_API_KEY}` },
         signal: AbortSignal.timeout(5000),
-      }
+      },
     );
 
     const searchData = await searchResp.json();
@@ -156,7 +171,7 @@ async function fetchSteamGridAssets(
       {
         headers: { Authorization: `Bearer ${STEAMGRIDDB_API_KEY}` },
         signal: AbortSignal.timeout(5000),
-      }
+      },
     );
 
     const assetsData = await assetsResp.json();
@@ -247,7 +262,7 @@ const app = new Elysia()
               relevanceScore: calculateSimpleScore(
                 r.item.lowerName,
                 queryLower,
-                r.score || 0
+                r.score || 0,
               ),
             }))
             .sort((a, b) => b.relevanceScore - a.relevanceScore)
@@ -276,13 +291,13 @@ const app = new Elysia()
         page: t.Optional(t.String()),
         perPage: t.Optional(t.String()),
       }),
-    }
+    },
   )
   .get(
     "/games",
     async ({ query, status }) => {
       const page = Math.max(1, parseInt(query.page as string) || 1);
-      const perPage = Math.min(100, parseInt(query.perPage as string) || 16);
+      const perPage = Math.min(10000, parseInt(query.perPage as string) || 16);
 
       try {
         const allGames = await getAppList();
@@ -304,19 +319,16 @@ const app = new Elysia()
         page: t.Optional(t.String()),
         perPage: t.Optional(t.String()),
       }),
-    }
+    },
   )
   .get("/games/hot", async ({ status }) => {
     try {
-      const search = await getCachedOrFetch(
-        "hotSearchResults",
-        async () => {
-          const response = await fetch(
-            "https://store.steampowered.com/search/results/?filter=globaltopsellers&ignore_preferences=1&json=1&hidef2p=1&category1=998"
-          );
-          return await response.json();
-        }
-      );
+      const search = await getCachedOrFetch("hotSearchResults", async () => {
+        const response = await fetch(
+          "https://store.steampowered.com/search/results/?filter=globaltopsellers&ignore_preferences=1&json=1&hidef2p=1&category1=998",
+        );
+        return await response.json();
+      });
       const items = (search.items || []).slice(0, 46);
       const appids = items
         .map((g: any) => {
@@ -328,7 +340,7 @@ const app = new Elysia()
         appids.map(async (id: number) => {
           const data = await fetchAppDetails(id);
           return data?.success ? data.data : null;
-        })
+        }),
       );
       return detailed.filter(Boolean);
     } catch (err) {
@@ -342,14 +354,14 @@ const app = new Elysia()
         async () => {
           const response = await fetch(STEAM_FEATURED_CATEGORIES_URL);
           return await response.json();
-        }
+        },
       );
       const items = (categories.top_sellers?.items || []).slice(0, 40);
       const detailed = await Promise.all(
         items.map(async (g: any) => {
           const data = await fetchAppDetails(g.id || g.appid);
           return data?.success ? data.data : null;
-        })
+        }),
       );
       return detailed.filter(Boolean);
     } catch (err) {
@@ -371,7 +383,7 @@ const app = new Elysia()
       params: t.Object({
         appid: t.String(),
       }),
-    }
+    },
   )
   .get(
     "/games/:appid/logos",
@@ -388,7 +400,7 @@ const app = new Elysia()
       params: t.Object({
         appid: t.String(),
       }),
-    }
+    },
   )
   .get(
     "/games/:appid/heroes",
@@ -405,10 +417,10 @@ const app = new Elysia()
       params: t.Object({
         appid: t.String(),
       }),
-    }
+    },
   )
   .listen(port);
 
 console.log(
-  `🦊 Vault API server running at ${app.server?.hostname}:${app.server?.port}`
+  `🦊 Vault API server running at ${app.server?.hostname}:${app.server?.port}`,
 );
